@@ -1,10 +1,14 @@
 import { AuthResponse, StudentProfileDto, UserDto } from "./types";
 
-const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_URL ||
-  (typeof window !== "undefined" && !window.location.hostname.includes("localhost")
-    ? "https://ai-study-twin.onrender.com/api"
-    : "http://localhost:5050/api");
+export const getApiBaseUrl = (): string => {
+  if (typeof window !== "undefined") {
+    if (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") {
+      return process.env.NEXT_PUBLIC_API_URL || "http://localhost:5050/api";
+    }
+    return "https://ai-study-twin.onrender.com/api";
+  }
+  return process.env.NEXT_PUBLIC_API_URL || "https://ai-study-twin.onrender.com/api";
+};
 
 export class ApiError extends Error {
   statusCode: number;
@@ -52,7 +56,8 @@ export async function apiFetch<T>(endpoint: string, options: RequestInit = {}): 
     headers["Content-Type"] = "application/json";
   }
 
-  const url = `${API_BASE_URL}${endpoint.startsWith("/") ? endpoint : `/${endpoint}`}`;
+  const baseUrl = getApiBaseUrl();
+  const url = `${baseUrl}${endpoint.startsWith("/") ? endpoint : `/${endpoint}`}`;
 
   try {
     const res = await fetch(url, {
@@ -65,7 +70,7 @@ export async function apiFetch<T>(endpoint: string, options: RequestInit = {}): 
       const refreshToken = getRefreshToken();
       if (refreshToken && token && !endpoint.includes("/auth/refresh-token")) {
         try {
-          const refreshRes = await fetch(`${API_BASE_URL}/auth/refresh-token`, {
+          const refreshRes = await fetch(`${baseUrl}/auth/refresh-token`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ accessToken: token, refreshToken }),
