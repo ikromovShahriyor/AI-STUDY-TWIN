@@ -1,0 +1,7 @@
+<Solution>
+  <Project Path="AiStudyTwin.Api/AiStudyTwin.Api.csproj" />
+  <Project Path="AiStudyTwin.Application/AiStudyTwin.Application.csproj" />
+  <Project Path="AiStudyTwin.Domain/AiStudyTwin.Domain.csproj" />
+  <Project Path="AiStudyTwin.Infrastructure/AiStudyTwin.Infrastructure.csproj" />
+  <Project Path="AiStudyTwin.Tests/AiStudyTwin.Tests.csproj" />
+</Solution>

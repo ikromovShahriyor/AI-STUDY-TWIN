@@ -1,0 +1,26 @@
+# Environment files
+.env
+.env.local
+.env.*
+!.env.example
+
+# Databases
+*.db
+*.db-shm
+*.db-wal
+
+# Backend Build artifacts
+bin/
+obj/
+*.user
+*.suo
+.vs/
+
+# Frontend
+node_modules/
+.next/
+out/
+build/
+dist/
+.DS_Store
+Thumbs.db
