@@ -8,7 +8,7 @@ COPY ["backend/AiStudyTwin.Application/AiStudyTwin.Application.csproj", "backend
 COPY ["backend/AiStudyTwin.Infrastructure/AiStudyTwin.Infrastructure.csproj", "backend/AiStudyTwin.Infrastructure/"]
 COPY ["backend/AiStudyTwin.Api/AiStudyTwin.Api.csproj", "backend/AiStudyTwin.Api/"]
 
-# Restore
+# Restore dependencies
 RUN dotnet restore "backend/AiStudyTwin.Api/AiStudyTwin.Api.csproj"
 
 # Copy full backend source and build
@@ -20,7 +20,14 @@ RUN dotnet publish "AiStudyTwin.Api.csproj" -c Release -o /app/publish /p:UseApp
 FROM mcr.microsoft.com/dotnet/aspnet:10.0-preview AS final
 WORKDIR /app
 COPY --from=build /app/publish .
-EXPOSE 5050
-ENV ASPNETCORE_URLS=http://+:5050
+
+# Stability and cloud container flags
+ENV DOTNET_USE_POLLING_FILE_WATCHER=true
+ENV DOTNET_RUNNING_IN_CONTAINER=true
+ENV ASPNETCORE_ENVIRONMENT=Production
 ENV UseSqlite=true
+
+EXPOSE 10000
+EXPOSE 5050
+
 ENTRYPOINT ["dotnet", "AiStudyTwin.Api.dll"]
