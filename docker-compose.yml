@@ -33,7 +33,7 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
     ports:
-      - "5055:5000"
+      - "7778:5000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -46,9 +46,9 @@ services:
     restart: always
     environment:
       - NODE_ENV=production
-      - NEXT_PUBLIC_API_URL=http://localhost:5055/api
+      - NEXT_PUBLIC_API_URL=http://localhost:7778/api
     ports:
-      - "3005:3000"
+      - "7777:3000"
     depends_on:
       - backend
 
