@@ -5,6 +5,7 @@ COPY package.json package-lock.json* ./
 RUN npm ci || npm install
 
 COPY . .
+RUN mkdir -p public
 RUN npm run build
 
 FROM node:22-alpine AS runner
@@ -17,7 +18,7 @@ COPY --from=builder /app/package.json ./
 COPY --from=builder /app/package-lock.json* ./
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/.next ./.next
-COPY --from=builder /app/public ./public 2>/dev/null || true
+COPY --from=builder /app/public ./public
 
 EXPOSE 3000
 CMD ["npm", "start", "--", "-p", "3000"]
