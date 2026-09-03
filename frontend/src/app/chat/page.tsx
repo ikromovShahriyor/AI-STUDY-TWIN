@@ -23,6 +23,7 @@ import {
   Zap,
   HelpCircle
 } from "lucide-react";
+import { MessageContent } from "@/components/chat/MessageContent";
 
 export default function ChatPage() {
   const { t, language } = useTranslation();
@@ -510,14 +511,10 @@ export default function ChatPage() {
                     fontSize: "14px",
                     lineHeight: 1.6,
                     color: "var(--text-primary)",
-                    whiteSpace: "pre-wrap",
                     wordBreak: "break-word"
                   }}
                 >
-                  <div>{textContent}</div>
-                  {isCurrentlyStreaming && (
-                    <span style={{ display: "inline-block", width: "8px", height: "14px", backgroundColor: "var(--accent-purple)", marginLeft: "4px", verticalAlign: "middle" }} className="animate-pulse" />
-                  )}
+                  <MessageContent content={textContent} isStreaming={isCurrentlyStreaming} />
 
                   {/* Sources if present */}
                   {msg.sources && msg.sources.length > 0 && (

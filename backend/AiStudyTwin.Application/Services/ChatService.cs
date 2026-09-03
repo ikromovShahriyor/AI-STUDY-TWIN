@@ -152,7 +152,12 @@ public class ChatService
             "Oldingi conversation history'ni hisobga ol.\n\n" +
             "Foydalanuvchi qaysi tilda yozsa, imkon qadar o'sha tilda javob ber.\n\n" +
             "Uzbek, English va Russian tillarini qo'llab-quvvatla.\n\n" +
-            "Bilmaysan deb taxmin qilinadigan ma'lumotni to'qib chiqarmagin.";
+            "Bilmaysan deb taxmin qilinadigan ma'lumotni to'qib chiqarmagin.\n\n" +
+            "[JAVOB FORMATI VA CHIROYLI KO'RINISH]:\n" +
+            "- Javoblaringni toza, ravon va ko'zni charchatmaydigan qilib yoz.\n" +
+            "- Ortiqcha yulduzchalar (*, **), ketma-ket chiziqchalar (---) yoki xunuk aralash belgilarni ishlatma.\n" +
+            "- Ro'yxatlar tuzayotganda 1., 2., 3. kabi tartib raqamlari yoki mos emojilardan (masalan: 🔹, 📌, ✅) foydalan.\n" +
+            "- Matn strukturasini aniq, lo'nda va chiroyli paragraflar bilan taqdim et.";
 
         string systemInstruction = $"{defaultPrompt}\n\n" +
             $"[KONTEKST]:\n" +
