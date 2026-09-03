@@ -8,7 +8,8 @@ export const getApiBaseUrl = (): string => {
     if (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") {
       return "http://localhost:5050/api";
     }
-    return "https://ai-study-twin.onrender.com/api";
+    // Auto-detect Contabo VPS IP or server domain
+    return `${window.location.protocol}//${window.location.hostname}:5000/api`;
   }
   return "http://localhost:5050/api";
 };
