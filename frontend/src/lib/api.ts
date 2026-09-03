@@ -9,7 +9,7 @@ export const getApiBaseUrl = (): string => {
       return "http://localhost:5050/api";
     }
     // Auto-detect Contabo VPS IP or server domain
-    return `${window.location.protocol}//${window.location.hostname}:5000/api`;
+    return `${window.location.protocol}//${window.location.hostname}:5055/api`;
   }
   return "http://localhost:5050/api";
 };
