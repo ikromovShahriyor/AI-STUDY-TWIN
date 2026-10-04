@@ -46,6 +46,7 @@ public static class DependencyInjection
         services.AddScoped<IJwtTokenService, JwtTokenService>();
         services.AddScoped<IPasswordHasher, BcryptPasswordHasher>();
         services.AddScoped<ICurrentUserService, CurrentUserService>();
+        services.AddScoped<IFileStorageService, FileStorageService>();
 
         // AI & Voice Services
         services.AddHttpClient<IWebSearchService, WebSearchService>()

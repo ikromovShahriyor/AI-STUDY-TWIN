@@ -30,6 +30,7 @@ public class AppDbContext : DbContext, IAppDbContext
     public DbSet<ChatMessage> ChatMessages => Set<ChatMessage>();
     public DbSet<VoiceRecord> VoiceRecords => Set<VoiceRecord>();
     public DbSet<AiAnalysis> AiAnalyses => Set<AiAnalysis>();
+    public DbSet<VisionInteraction> VisionInteractions => Set<VisionInteraction>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -151,6 +152,24 @@ public class AppDbContext : DbContext, IAppDbContext
         {
             b.HasKey(sc => sc.Id);
             b.HasIndex(sc => new { sc.StudentProfileId, sc.DailyChallengeId, sc.Date });
+        });
+
+        // VisionInteractions
+        modelBuilder.Entity<VisionInteraction>(b =>
+        {
+            b.HasKey(v => v.Id);
+            b.HasOne(v => v.StudentProfile)
+                .WithMany()
+                .HasForeignKey(v => v.StudentProfileId)
+                .OnDelete(DeleteBehavior.Cascade);
+            b.HasOne(v => v.Conversation)
+                .WithMany()
+                .HasForeignKey(v => v.ConversationId)
+                .OnDelete(DeleteBehavior.SetNull);
+            b.HasOne(v => v.Subject)
+                .WithMany()
+                .HasForeignKey(v => v.SubjectId)
+                .OnDelete(DeleteBehavior.SetNull);
         });
     }
 }

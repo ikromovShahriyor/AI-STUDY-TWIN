@@ -196,6 +196,31 @@ export interface MessageDto {
   content: string;
   sources?: WebSearchSourceDto[];
   audioUrl?: string;
+  imageUrl?: string;
+  createdAt: string;
+}
+
+export interface VisionAnalyzeResponse {
+  success: boolean;
+  extractedContent: string;
+  answer: string;
+  detectedSubject: string;
+  confidence?: number;
+  conversationId: string;
+  message: MessageDto;
+  imageUrl?: string;
+}
+
+export interface VisionHistoryDto {
+  id: string;
+  studentProfileId: string;
+  conversationId?: string;
+  subjectName?: string;
+  imageUrl: string;
+  question?: string;
+  aiResponse: string;
+  extractedContent?: string;
+  detectedSubject?: string;
   createdAt: string;
 }
 

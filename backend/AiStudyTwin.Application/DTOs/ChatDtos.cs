@@ -21,6 +21,7 @@ public record MessageDto(
     string Content,
     List<WebSearchSourceDto>? Sources,
     string? AudioUrl,
+    string? ImageUrl,
     DateTime CreatedAt
 );
 

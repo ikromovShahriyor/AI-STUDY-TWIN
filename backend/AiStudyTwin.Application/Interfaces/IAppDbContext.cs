@@ -25,6 +25,7 @@ public interface IAppDbContext
     DbSet<ChatMessage> ChatMessages { get; }
     DbSet<VoiceRecord> VoiceRecords { get; }
     DbSet<AiAnalysis> AiAnalyses { get; }
+    DbSet<VisionInteraction> VisionInteractions { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

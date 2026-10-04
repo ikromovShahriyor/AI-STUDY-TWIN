@@ -14,6 +14,21 @@ export const getApiBaseUrl = (): string => {
   return "http://localhost:5050/api";
 };
 
+export const getFileUrl = (relativeUrl?: string): string => {
+  if (!relativeUrl) return "";
+  if (
+    relativeUrl.startsWith("http://") ||
+    relativeUrl.startsWith("https://") ||
+    relativeUrl.startsWith("blob:") ||
+    relativeUrl.startsWith("data:")
+  ) {
+    return relativeUrl;
+  }
+  const apiBase = getApiBaseUrl();
+  const serverOrigin = apiBase.replace(/\/api\/?$/, "");
+  return `${serverOrigin}${relativeUrl.startsWith("/") ? "" : "/"}${relativeUrl}`;
+};
+
 export class ApiError extends Error {
   statusCode: number;
   errors?: Record<string, string[]>;

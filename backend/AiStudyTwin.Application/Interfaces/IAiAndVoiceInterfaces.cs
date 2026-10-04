@@ -38,6 +38,16 @@ public interface IAiProviderService
         int dailyMinutes,
         string language = "uz",
         CancellationToken cancellationToken = default);
+
+    Task<string> AnalyzeVisionImageAsync(
+        byte[] imageBytes,
+        string mimeType,
+        string prompt,
+        string systemInstruction,
+        List<AiChatMessage>? conversationHistory = null,
+        string? subjectContext = null,
+        string language = "uz",
+        CancellationToken cancellationToken = default);
 }
 
 public interface IWebSearchService

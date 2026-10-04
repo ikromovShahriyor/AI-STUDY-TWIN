@@ -49,4 +49,41 @@ public class ChatController : BaseApiController
         await _chatService.DeleteConversationAsync(id, CurrentStudentProfileId, cancellationToken);
         return NoContent();
     }
+
+    [HttpPost("vision")]
+    public async Task<ActionResult<VisionAnalyzeResponse>> SendVisionMessage(
+        IFormFile image,
+        [FromForm] string? question,
+        [FromForm] Guid? conversationId,
+        [FromForm] Guid? subjectId,
+        [FromForm] string language = "uz",
+        CancellationToken cancellationToken = default)
+    {
+        if (image == null || image.Length == 0)
+        {
+            return BadRequest(new { message = "Rasm fayli yuklanmadi." });
+        }
+
+        using var stream = image.OpenReadStream();
+        var response = await _chatService.ProcessVisionMessageAsync(
+            CurrentStudentProfileId,
+            stream,
+            image.FileName,
+            image.ContentType,
+            question,
+            conversationId,
+            subjectId,
+            language,
+            cancellationToken
+        );
+
+        return Ok(response);
+    }
+
+    [HttpGet("vision/history")]
+    public async Task<ActionResult<List<VisionHistoryDto>>> GetVisionHistory(CancellationToken cancellationToken)
+    {
+        var history = await _chatService.GetVisionHistoryAsync(CurrentStudentProfileId, cancellationToken);
+        return Ok(history);
+    }
 }

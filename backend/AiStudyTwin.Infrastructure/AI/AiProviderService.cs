@@ -249,8 +249,9 @@ public class AiProviderService : IAiProviderService
         List<AiChatMessage>? history,
         CancellationToken cancellationToken)
     {
-        var configuredModel = _config["Ai:GeminiModel"] ?? "gemini-3.5-flash";
-        var candidateModels = new[] { configuredModel, "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-3.7-flash" }
+        var configuredModel = _config["Ai:GeminiModel"] ?? "gemini-2.0-flash";
+        var candidateModels = new[] { configuredModel, "gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.5-flash", "gemini-3.5-flash" }
+            .Where(m => !string.IsNullOrWhiteSpace(m))
             .Distinct().ToList();
 
         var temperature = _config.GetValue<double>("Ai:Temperature", 0.7);
@@ -475,6 +476,309 @@ public class AiProviderService : IAiProviderService
                     _logger.LogInformation("[AI STEP 5] Successfully parsed {Provider} AI response. CharacterLength: {Length}", providerName, content.Length);
                     return content;
                 }
+            }
+        }
+
+        return null;
+    }
+
+    public async Task<string> AnalyzeVisionImageAsync(
+        byte[] imageBytes,
+        string mimeType,
+        string prompt,
+        string systemInstruction,
+        List<AiChatMessage>? conversationHistory = null,
+        string? subjectContext = null,
+        string language = "uz",
+        CancellationToken cancellationToken = default)
+    {
+        _logger.LogInformation("[VISION AI] Image analysis started. Bytes: {Bytes}, MimeType: {Mime}, PromptLength: {PromptLen}, Subject: {Subject}",
+            imageBytes.Length, mimeType, prompt?.Length ?? 0, subjectContext ?? "General");
+
+        var provider = _config["Ai:Provider"] ?? _config["AI_PROVIDER"] ?? "Auto";
+        var geminiKey = _config["GEMINI_API_KEY"] ?? _config["Ai:GeminiApiKey"] ?? _config["AI_API_KEY"];
+        var openAiKey = _config["OPENAI_API_KEY"] ?? _config["Ai:OpenAiApiKey"];
+        var openRouterKey = _config["OPENROUTER_API_KEY"] ?? _config["Ai:OpenRouterApiKey"];
+
+        var providerErrors = new List<string>();
+
+        // 1. Google Gemini Multimodal Vision API (Primary)
+        if (!string.IsNullOrWhiteSpace(geminiKey) && (provider.Equals("Gemini", StringComparison.OrdinalIgnoreCase) || provider.Equals("Auto", StringComparison.OrdinalIgnoreCase)))
+        {
+            try
+            {
+                var geminiRes = await CallGeminiVisionAsync(geminiKey, imageBytes, mimeType, prompt, systemInstruction, conversationHistory, cancellationToken);
+                if (!string.IsNullOrWhiteSpace(geminiRes))
+                {
+                    _logger.LogInformation("[VISION AI] Successfully received Gemini Vision response. Length: {Len}", geminiRes.Length);
+                    return geminiRes;
+                }
+                providerErrors.Add("Gemini Vision returned empty content.");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[VISION AI] Gemini Vision call failed: {Message}", ex.Message);
+                providerErrors.Add($"Gemini Vision error: {ex.Message}");
+            }
+        }
+
+        // 2. OpenAI Multimodal Vision (Secondary)
+        if (!string.IsNullOrWhiteSpace(openAiKey) && (provider.Equals("OpenAI", StringComparison.OrdinalIgnoreCase) || provider.Equals("Auto", StringComparison.OrdinalIgnoreCase)))
+        {
+            try
+            {
+                var openAiModel = _config["Ai:OpenAiVisionModel"] ?? _config["Ai:OpenAiModel"] ?? "gpt-4o-mini";
+                var openAiEndpoint = _config["Ai:OpenAiEndpoint"] ?? _config["OPENAI_BASE_URL"] ?? "https://api.openai.com/v1/chat/completions";
+                var openAiRes = await CallOpenAiCompatibleVisionAsync("OpenAI", openAiKey, openAiEndpoint, openAiModel, imageBytes, mimeType, prompt, systemInstruction, conversationHistory, cancellationToken);
+                if (!string.IsNullOrWhiteSpace(openAiRes))
+                {
+                    _logger.LogInformation("[VISION AI] Successfully received OpenAI Vision response. Length: {Len}", openAiRes.Length);
+                    return openAiRes;
+                }
+                providerErrors.Add("OpenAI Vision returned empty content.");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[VISION AI] OpenAI Vision call failed: {Message}", ex.Message);
+                providerErrors.Add($"OpenAI Vision error: {ex.Message}");
+            }
+        }
+
+        // 3. OpenRouter Multimodal Vision
+        if (!string.IsNullOrWhiteSpace(openRouterKey) && (provider.Equals("OpenRouter", StringComparison.OrdinalIgnoreCase) || provider.Equals("Auto", StringComparison.OrdinalIgnoreCase)))
+        {
+            try
+            {
+                var routerModel = _config["Ai:OpenRouterVisionModel"] ?? "google/gemini-2.0-flash-001";
+                var routerEndpoint = "https://openrouter.ai/api/v1/chat/completions";
+                var routerRes = await CallOpenAiCompatibleVisionAsync("OpenRouter", openRouterKey, routerEndpoint, routerModel, imageBytes, mimeType, prompt, systemInstruction, conversationHistory, cancellationToken);
+                if (!string.IsNullOrWhiteSpace(routerRes))
+                {
+                    _logger.LogInformation("[VISION AI] Successfully received OpenRouter Vision response. Length: {Len}", routerRes.Length);
+                    return routerRes;
+                }
+                providerErrors.Add("OpenRouter Vision returned empty content.");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[VISION AI] OpenRouter Vision call failed: {Message}", ex.Message);
+                providerErrors.Add($"OpenRouter Vision error: {ex.Message}");
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(geminiKey) && string.IsNullOrWhiteSpace(openAiKey) && string.IsNullOrWhiteSpace(openRouterKey))
+        {
+            throw new AppException("Vision AI xizmati kaliti (GEMINI_API_KEY) sozlanmagan. Iltimos, .env faylida API kalitini kiriting.", 503);
+        }
+
+        var aggregated = string.Join(" | ", providerErrors);
+        _logger.LogError("[VISION AI ERROR] All vision providers failed: {Errors}", aggregated);
+        throw new AppException("Rasmni tahlil qilib bo'lmadi. Iltimos, rasmni aniqroq qilib qayta yuboring.", 500);
+    }
+
+    private async Task<string?> CallGeminiVisionAsync(
+        string apiKey,
+        byte[] imageBytes,
+        string mimeType,
+        string? prompt,
+        string systemInstruction,
+        List<AiChatMessage>? history,
+        CancellationToken cancellationToken)
+    {
+        var configuredModel = _config["Ai:GeminiModel"] ?? "gemini-2.0-flash";
+        var candidateModels = new[] { configuredModel, "gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.5-flash", "gemini-3.5-flash" }
+            .Where(m => !string.IsNullOrWhiteSpace(m))
+            .Distinct().ToList();
+
+        var temperature = _config.GetValue<double>("Ai:Temperature", 0.4);
+        var maxTokens = _config.GetValue<int>("Ai:MaxOutputTokens", 4096);
+
+        var contents = new List<object>();
+
+        // Previous conversation history turns
+        if (history != null && history.Any())
+        {
+            string? lastRole = null;
+            foreach (var h in history)
+            {
+                if (string.IsNullOrWhiteSpace(h.Content)) continue;
+                var role = h.Role.Equals("user", StringComparison.OrdinalIgnoreCase) ? "user" : "model";
+                if (role == lastRole) continue;
+
+                contents.Add(new
+                {
+                    role = role,
+                    parts = new[] { new { text = h.Content } }
+                });
+                lastRole = role;
+            }
+
+            if (lastRole == "user")
+            {
+                contents.Add(new
+                {
+                    role = "model",
+                    parts = new[] { new { text = "Tushundim, davom etamiz." } }
+                });
+            }
+        }
+
+        var base64Data = Convert.ToBase64String(imageBytes);
+
+        // Multimodal user turn with both text and inline image
+        var partsList = new List<object>();
+        var userText = string.IsNullOrWhiteSpace(prompt)
+            ? "Ushbu rasmni diqqat bilan o'rganib, dars materialini, masalani yoki formulani qadamma-qadam tushuntirib ber."
+            : prompt;
+
+        partsList.Add(new { text = userText });
+        partsList.Add(new
+        {
+            inlineData = new
+            {
+                mimeType = mimeType,
+                data = base64Data
+            }
+        });
+
+        contents.Add(new
+        {
+            role = "user",
+            parts = partsList
+        });
+
+        var requestBody = new
+        {
+            contents = contents,
+            system_instruction = new
+            {
+                parts = new[] { new { text = systemInstruction } }
+            },
+            generationConfig = new
+            {
+                temperature = temperature,
+                maxOutputTokens = maxTokens
+            }
+        };
+
+        var jsonPayload = JsonSerializer.Serialize(requestBody, CamelCaseOptions);
+
+        foreach (var model in candidateModels)
+        {
+            try
+            {
+                var endpoint = $"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent";
+                _logger.LogInformation("[VISION AI] Sending image request to Gemini API. Model: {Model}", model);
+
+                using var req = new HttpRequestMessage(HttpMethod.Post, endpoint);
+                req.Headers.Add("X-goog-api-key", apiKey);
+                req.Content = new StringContent(jsonPayload, Encoding.UTF8, "application/json");
+
+                var response = await _httpClient.SendAsync(req, cancellationToken);
+                _logger.LogInformation("[VISION AI] Gemini returned HTTP status: {StatusCode} for model {Model}", (int)response.StatusCode, model);
+
+                if (response.IsSuccessStatusCode)
+                {
+                    var parsed = await ParseGeminiResponseAsync(response, cancellationToken);
+                    if (!string.IsNullOrWhiteSpace(parsed))
+                    {
+                        return parsed;
+                    }
+                }
+                else
+                {
+                    var err = await response.Content.ReadAsStringAsync(cancellationToken);
+                    _logger.LogWarning("[VISION AI] Gemini error from model {Model}: {Error}", model, err);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[VISION AI] Failed attempt calling Gemini model {Model}", model);
+            }
+        }
+
+        return null;
+    }
+
+    private async Task<string?> CallOpenAiCompatibleVisionAsync(
+        string providerName,
+        string apiKey,
+        string endpoint,
+        string model,
+        byte[] imageBytes,
+        string mimeType,
+        string? prompt,
+        string systemInstruction,
+        List<AiChatMessage>? history,
+        CancellationToken cancellationToken)
+    {
+        var temperature = _config.GetValue<double>("Ai:Temperature", 0.4);
+        var maxTokens = _config.GetValue<int>("Ai:MaxOutputTokens", 4096);
+
+        using var req = new HttpRequestMessage(HttpMethod.Post, endpoint);
+        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+
+        if (providerName.Equals("OpenRouter", StringComparison.OrdinalIgnoreCase))
+        {
+            req.Headers.Add("HTTP-Referer", "https://aistudytwin.uz");
+            req.Headers.Add("X-Title", "AI Study Twin Vision");
+        }
+
+        var messages = new List<object>
+        {
+            new { role = "system", content = systemInstruction }
+        };
+
+        if (history != null && history.Any())
+        {
+            foreach (var h in history)
+            {
+                if (string.IsNullOrWhiteSpace(h.Content)) continue;
+                var role = h.Role.Equals("user", StringComparison.OrdinalIgnoreCase) ? "user" : "assistant";
+                messages.Add(new { role = role, content = h.Content });
+            }
+        }
+
+        var base64 = Convert.ToBase64String(imageBytes);
+        var textContent = string.IsNullOrWhiteSpace(prompt)
+            ? "Ushbu rasmni diqqat bilan o'rganib, dars materialini, masalani yoki formulani qadamma-qadam tushuntirib ber."
+            : prompt;
+
+        var userContentList = new List<object>
+        {
+            new { type = "text", text = textContent },
+            new { type = "image_url", image_url = new { url = $"data:{mimeType};base64,{base64}" } }
+        };
+
+        messages.Add(new { role = "user", content = userContentList });
+
+        var payload = new
+        {
+            model = model,
+            messages = messages,
+            temperature = temperature,
+            max_tokens = maxTokens
+        };
+
+        var json = JsonSerializer.Serialize(payload, CamelCaseOptions);
+        req.Content = new StringContent(json, Encoding.UTF8, "application/json");
+
+        var response = await _httpClient.SendAsync(req, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            var err = await response.Content.ReadAsStringAsync(cancellationToken);
+            _logger.LogWarning("[VISION AI] {Provider} API error: {Error}", providerName, err);
+            return null;
+        }
+
+        using var doc = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(cancellationToken), cancellationToken: cancellationToken);
+        var root = doc.RootElement;
+        if (root.TryGetProperty("choices", out var choices) && choices.GetArrayLength() > 0)
+        {
+            var firstChoice = choices[0];
+            if (firstChoice.TryGetProperty("message", out var msg) && msg.TryGetProperty("content", out var contentProp))
+            {
+                return contentProp.GetString();
             }
         }
 

@@ -13,15 +13,18 @@ public class ChatService
     private readonly IAppDbContext _db;
     private readonly IAiProviderService _aiProvider;
     private readonly IWebSearchService _webSearch;
+    private readonly IFileStorageService _fileStorage;
 
     public ChatService(
         IAppDbContext db,
         IAiProviderService aiProvider,
-        IWebSearchService webSearch)
+        IWebSearchService webSearch,
+        IFileStorageService? fileStorage = null)
     {
         _db = db;
         _aiProvider = aiProvider;
         _webSearch = webSearch;
+        _fileStorage = fileStorage!;
     }
 
     public async Task<List<ConversationDto>> GetConversationsAsync(Guid studentProfileId, CancellationToken cancellationToken = default)
@@ -224,6 +227,221 @@ public class ChatService
         }
     }
 
+    public async Task<VisionAnalyzeResponse> ProcessVisionMessageAsync(
+        Guid studentProfileId,
+        Stream imageStream,
+        string fileName,
+        string contentType,
+        string? question,
+        Guid? conversationId,
+        Guid? subjectId,
+        string language = "uz",
+        CancellationToken cancellationToken = default)
+    {
+        // 1. Validate stream
+        if (imageStream == null || imageStream.Length == 0)
+        {
+            throw new ValidationException("Image", "Rasm fayli yuborilmadi.");
+        }
+
+        // 2. Read stream into byte array for multimodal provider
+        using var ms = new MemoryStream();
+        await imageStream.CopyToAsync(ms, cancellationToken);
+        var imageBytes = ms.ToArray();
+
+        // 3. Save to storage via IFileStorageService
+        ms.Position = 0;
+        var (relativeUrl, absolutePath) = await _fileStorage.SaveImageAsync(ms, fileName, "vision", cancellationToken);
+
+        // 4. Retrieve or create conversation
+        ChatConversation conversation;
+        if (conversationId.HasValue)
+        {
+            conversation = await _db.ChatConversations
+                .Include(c => c.Subject)
+                .Include(c => c.Messages)
+                .FirstOrDefaultAsync(c => c.Id == conversationId.Value && c.StudentProfileId == studentProfileId, cancellationToken)
+                ?? throw new NotFoundException("Suhbat", conversationId.Value);
+        }
+        else
+        {
+            var title = string.IsNullOrWhiteSpace(question)
+                ? "📷 Foto dars"
+                : (question.Length > 30 ? question[..30] + "..." : question);
+
+            conversation = new ChatConversation
+            {
+                StudentProfileId = studentProfileId,
+                SubjectId = subjectId,
+                Title = title
+            };
+            _db.ChatConversations.Add(conversation);
+            await _db.SaveChangesAsync(cancellationToken);
+        }
+
+        // 5. Gather prior conversation history
+        var priorHistory = conversation.Messages
+            .OrderBy(m => m.CreatedAt)
+            .TakeLast(HistoryLimit)
+            .Select(m => new AiChatMessage(m.Sender == MessageSender.User ? "user" : "assistant", m.Content))
+            .ToList();
+
+        // 6. Add user message with image attached
+        var userContent = string.IsNullOrWhiteSpace(question) ? "📷 [Rasm yuborildi]" : question.Trim();
+        var userMsg = new ChatMessage
+        {
+            ConversationId = conversation.Id,
+            Sender = MessageSender.User,
+            Content = userContent,
+            ImageUrl = relativeUrl,
+            CreatedAt = DateTime.UtcNow
+        };
+        _db.ChatMessages.Add(userMsg);
+
+        // 7. Prepare pedagogical Vision Tutor system instructions
+        var profile = await _db.StudentProfiles.FindAsync(new object[] { studentProfileId }, cancellationToken);
+        var subjectContext = conversation.Subject?.NameUz;
+        var level = profile?.KnowledgeLevel ?? KnowledgeLevel.Beginner;
+
+        var visionSystemPrompt =
+            "Sen AI Study Twin platformasining professional AI Photo Teacher va Vision Tutor repetitorisan.\n\n" +
+            "Sening vazifang o'quvchi yuborgan rasmni (matematika, formulalar, fizika, kimyo, biologiya, tarix, geografiya, kitob sahifalari, test savollari, diagramma va grafiklar, jadvallar, studentning daftaridagi handwritten yozuvlar va uy vazifalarini) diqqat bilan tushunib, unga dars berishdir.\n\n" +
+            "[MUHIM PEDAGOGIK TALABLAR]:\n" +
+            "1. FAQAT yakuniy javobni berma! O'quvchiga teacher kabi qadamma-qadam, formulalar va qoidalarni izohlab tushuntir.\n" +
+            "2. AGAR O'QUVCHINING O'Z YECHIMI YOKI UY VAZIFASI BO'LSA (Homework Checker):\n" +
+            "   - Masalani va student yechimini aniqla;\n" +
+            "   - Qaysi qadamlari to'g'ri ekanini tasdiqla;\n" +
+            "   - Xatoni aniq ko'rsat (masalan: ❌ '3-qadamda ishora xatosi bor');\n" +
+            "   - Xatoning sababini muloyim tushuntir;\n" +
+            "   - To'g'ri yechimni ko'rsat.\n" +
+            "3. AGAR RASM SIFATI XIRA YOKI O'QIB BO'LMAS BO'LSA:\n" +
+            "   - O'quvchiga rasmni yorug'roq joyda yoki aniqroq qilib qayta olishni muloyim tavsiya qil.\n" +
+            "4. BILIM DARAJASIGA MOSLASHTIRISH:\n" +
+            $"   - O'quvchining bilim darajasi: {level}. Tushuntirish uslubi aynan shunga mos bo'lsin (Beginner uchun soddaroq, Advanced uchun chuqurroq).\n" +
+            "5. INTERAKTIV O'QITISH:\n" +
+            "   - Tushuntirish oxirida student bilan darsni davom ettirish uchun:\n" +
+            "     'Shunga o'xshash bitta masala yechib ko'rishni xohlaysanmi?' deb taklif ber.\n" +
+            $"6. Interfeys tili: {language} (uz/en/ru). O'quvchi yozgan yoki tanlagan tilda ravon javob ber.";
+
+        var promptToSend = string.IsNullOrWhiteSpace(question)
+            ? "Ushbu rasmni diqqat bilan o'rganib, dars materialini, masalani yoki formulani qadamma-qadam tushuntirib ber."
+            : question.Trim();
+
+        // 8. Generate multimodal AI Vision response
+        var aiAnswer = await _aiProvider.AnalyzeVisionImageAsync(
+            imageBytes,
+            contentType,
+            promptToSend,
+            visionSystemPrompt,
+            priorHistory,
+            subjectContext,
+            language,
+            cancellationToken
+        );
+
+        // 9. Save assistant response to conversation
+        var assistantMsg = new ChatMessage
+        {
+            ConversationId = conversation.Id,
+            Sender = MessageSender.Assistant,
+            Content = aiAnswer,
+            CreatedAt = DateTime.UtcNow
+        };
+        _db.ChatMessages.Add(assistantMsg);
+        conversation.UpdatedAt = DateTime.UtcNow;
+
+        // 10. Extract summary snippet and detect subject
+        var detectedSubject = subjectContext ?? DetectSubjectFromContent(promptToSend + " " + aiAnswer);
+        var extractedSnippet = promptToSend.Length > 80 ? promptToSend[..80] + "..." : promptToSend;
+
+        // 11. Record Vision Interaction history in DB
+        var visionInteraction = new VisionInteraction
+        {
+            StudentProfileId = studentProfileId,
+            ConversationId = conversation.Id,
+            SubjectId = conversation.SubjectId,
+            ImageUrl = relativeUrl,
+            StoragePath = absolutePath,
+            Question = question,
+            AIResponse = aiAnswer,
+            ExtractedContent = extractedSnippet,
+            DetectedSubject = detectedSubject,
+            Confidence = 0.95,
+            CreatedAt = DateTime.UtcNow
+        };
+        _db.VisionInteractions.Add(visionInteraction);
+
+        userMsg.VisionInteractionId = visionInteraction.Id;
+
+        // 12. Update daily challenge progress for chat
+        var chatChallenge = await _db.StudentDailyChallenges
+            .Include(c => c.DailyChallenge)
+            .FirstOrDefaultAsync(c => c.StudentProfileId == studentProfileId && c.Date == DateTime.UtcNow.Date && c.DailyChallenge.ChallengeType == ChallengeType.ChatWithAi, cancellationToken);
+
+        if (chatChallenge != null && !chatChallenge.IsCompleted)
+        {
+            chatChallenge.CurrentCount++;
+            if (chatChallenge.CurrentCount >= chatChallenge.DailyChallenge.TargetCount)
+            {
+                chatChallenge.IsCompleted = true;
+                chatChallenge.CompletedAt = DateTime.UtcNow;
+            }
+        }
+
+        await _db.SaveChangesAsync(cancellationToken);
+
+        return new VisionAnalyzeResponse(
+            true,
+            extractedSnippet,
+            aiAnswer,
+            detectedSubject,
+            0.95,
+            conversation.Id,
+            MapToMessageDto(assistantMsg),
+            relativeUrl
+        );
+    }
+
+    public async Task<List<VisionHistoryDto>> GetVisionHistoryAsync(Guid studentProfileId, CancellationToken cancellationToken = default)
+    {
+        var items = await _db.VisionInteractions
+            .Include(v => v.Subject)
+            .Where(v => v.StudentProfileId == studentProfileId)
+            .OrderByDescending(v => v.CreatedAt)
+            .Take(50)
+            .ToListAsync(cancellationToken);
+
+        return items.Select(v => new VisionHistoryDto(
+            v.Id,
+            v.StudentProfileId,
+            v.ConversationId,
+            v.Subject?.NameUz,
+            v.ImageUrl,
+            v.Question,
+            v.AIResponse,
+            v.ExtractedContent,
+            v.DetectedSubject,
+            v.CreatedAt
+        )).ToList();
+    }
+
+    private static string DetectSubjectFromContent(string text)
+    {
+        var lower = text.ToLowerInvariant();
+        if (lower.Contains("tenglama") || lower.Contains("integral") || lower.Contains("hosila") || lower.Contains("formula") || lower.Contains("ildiz") || lower.Contains("x =") || lower.Contains("+") || lower.Contains("-"))
+            return "Matematika";
+        if (lower.Contains("tezlik") || lower.Contains("kuch") || lower.Contains("massa") || lower.Contains("nyuton") || lower.Contains("tok") || lower.Contains("energiya"))
+            return "Fizika";
+        if (lower.Contains("molekula") || lower.Contains("reaksiya") || lower.Contains("atom") || lower.Contains("kislota") || lower.Contains("element"))
+            return "Kimyo";
+        if (lower.Contains("hujayra") || lower.Contains("dnk") || lower.Contains("organizm") || lower.Contains("o'simlik"))
+            return "Biologiya";
+        if (lower.Contains("kod") || lower.Contains("funksiya") || lower.Contains("dastur") || lower.Contains("class") || lower.Contains("python") || lower.Contains("javascript"))
+            return "Dasturlash & IT";
+
+        return "Umumiy ta'lim";
+    }
+
     private static MessageDto MapToMessageDto(ChatMessage m)
     {
         List<WebSearchSourceDto>? sources = null;
@@ -244,6 +462,7 @@ public class ChatService
             m.Content,
             sources,
             m.AudioUrl,
+            m.ImageUrl,
             m.CreatedAt
         );
     }

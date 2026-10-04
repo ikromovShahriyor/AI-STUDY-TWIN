@@ -8,6 +8,7 @@
 *.db
 *.db-shm
 *.db-wal
+uploads/
 
 # Backend Build artifacts
 bin/

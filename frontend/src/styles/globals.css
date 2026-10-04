@@ -334,3 +334,46 @@ html, body {
     padding-bottom: 80px;
   }
 }
+
+/* Vision AI Photo Scanner Animation */
+@keyframes visionScanBeam {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.vision-scan-beam {
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent 0%, rgba(6, 182, 212, 0.8) 50%, rgba(139, 92, 246, 0.9) 80%, transparent 100%);
+  animation: visionScanBeam 1.5s infinite linear;
+}
+
+.photo-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 48px;
+  padding: 0 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  border: 1px solid var(--border-glass);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+}
+
+.photo-action-btn:hover {
+  background: var(--bg-tertiary);
+  border-color: var(--accent-purple);
+  color: var(--text-primary);
+  transform: translateY(-1px);
+}
+

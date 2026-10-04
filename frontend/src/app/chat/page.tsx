@@ -3,8 +3,8 @@
 import React, { useEffect, useState, useRef } from "react";
 import { useTranslation } from "@/lib/i18n";
 import { useAuth } from "@/lib/auth-context";
-import { apiFetch } from "@/lib/api";
-import { ConversationDto, MessageDto, SubjectDto } from "@/lib/types";
+import { apiFetch, getFileUrl } from "@/lib/api";
+import { ConversationDto, MessageDto, SubjectDto, VisionAnalyzeResponse } from "@/lib/types";
 import {
   Send,
   Mic,
@@ -21,9 +21,21 @@ import {
   Check,
   RotateCcw,
   Zap,
-  HelpCircle
+  HelpCircle,
+  Camera,
+  Image as ImageIcon,
+  Paperclip,
+  Scan,
+  ZoomIn,
+  AlertCircle,
+  UploadCloud,
+  X,
+  FileImage,
+  RefreshCw
 } from "lucide-react";
 import { MessageContent } from "@/components/chat/MessageContent";
+import { CameraCaptureModal } from "@/components/chat/CameraCaptureModal";
+import { ImageLightboxModal } from "@/components/chat/ImageLightboxModal";
 
 export default function ChatPage() {
   const { t, language } = useTranslation();
@@ -37,6 +49,19 @@ export default function ChatPage() {
   const [inputContent, setInputContent] = useState("");
   const [isSending, setIsSending] = useState(false);
   const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
+
+  // Vision AI / Photo states
+  const [selectedImageFile, setSelectedImageFile] = useState<File | null>(null);
+  const [selectedImagePreview, setSelectedImagePreview] = useState<string | null>(null);
+  const [isCameraModalOpen, setIsCameraModalOpen] = useState(false);
+  const [isVisionAnalyzing, setIsVisionAnalyzing] = useState(false);
+  const [lightboxImageUrl, setLightboxImageUrl] = useState<string | null>(null);
+  const [isDraggingOver, setIsDraggingOver] = useState(false);
+  const [fileValidationErr, setFileValidationErr] = useState<string | null>(null);
+
+  const cameraInputRef = useRef<HTMLInputElement | null>(null);
+  const galleryInputRef = useRef<HTMLInputElement | null>(null);
+  const uploadInputRef = useRef<HTMLInputElement | null>(null);
 
   // Streaming / typing animation state
   const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
@@ -196,11 +221,134 @@ export default function ChatPage() {
     }, 15);
   };
 
-  // Send Message
-  const handleSendMessage = async (textToSend?: string) => {
-    const text = textToSend || inputContent;
-    if (!text.trim() || isSending) return;
+  // Image selection validation & preview handler
+  const validateAndSetImage = (file: File) => {
+    setFileValidationErr(null);
+    const allowedTypes = ["image/jpeg", "image/png", "image/webp"];
+    const ext = file.name.split(".").pop()?.toLowerCase();
+    const isValidExt = ext === "jpg" || ext === "jpeg" || ext === "png" || ext === "webp";
 
+    if (!allowedTypes.includes(file.type) && !isValidExt) {
+      setFileValidationErr(t.chat.invalidFileType);
+      return;
+    }
+
+    if (file.size > 10 * 1024 * 1024) {
+      setFileValidationErr(t.chat.fileTooLarge);
+      return;
+    }
+
+    if (selectedImagePreview) {
+      URL.revokeObjectURL(selectedImagePreview);
+    }
+
+    const previewUrl = URL.createObjectURL(file);
+    setSelectedImageFile(file);
+    setSelectedImagePreview(previewUrl);
+  };
+
+  const handleClearImage = () => {
+    if (selectedImagePreview) {
+      URL.revokeObjectURL(selectedImagePreview);
+    }
+    setSelectedImageFile(null);
+    setSelectedImagePreview(null);
+    setFileValidationErr(null);
+  };
+
+  // Drag and Drop handlers
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingOver(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingOver(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingOver(false);
+
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      validateAndSetImage(e.dataTransfer.files[0]);
+    }
+  };
+
+  // Send Message (supporting Text and Multimodal Vision AI)
+  const handleSendMessage = async (textToSend?: string) => {
+    const text = textToSend !== undefined ? textToSend : inputContent;
+    if ((!text.trim() && !selectedImageFile) || isSending) return;
+
+    // Multimodal Vision Message branch
+    if (selectedImageFile) {
+      const fileToUpload = selectedImageFile;
+      const previewUrl = selectedImagePreview;
+      const promptText = text.trim();
+
+      const userMessage: MessageDto = {
+        id: `m_${Date.now()}`,
+        conversationId: activeConversationId || "temp",
+        sender: 1,
+        content: promptText || "📷 [Rasm yuborildi]",
+        imageUrl: previewUrl || undefined,
+        createdAt: new Date().toISOString()
+      };
+
+      setMessages(prev => [...prev, userMessage]);
+      setInputContent("");
+      setSelectedImageFile(null);
+      setSelectedImagePreview(null);
+      setIsSending(true);
+      setIsVisionAnalyzing(true);
+
+      try {
+        const formData = new FormData();
+        formData.append("image", fileToUpload);
+        if (promptText) {
+          formData.append("question", promptText);
+        }
+        if (activeConversationId) {
+          formData.append("conversationId", activeConversationId);
+        }
+        if (selectedSubjectId) {
+          formData.append("subjectId", selectedSubjectId);
+        }
+        formData.append("language", language);
+
+        const visionRes = await apiFetch<VisionAnalyzeResponse>("/chat/vision", {
+          method: "POST",
+          body: formData
+        });
+
+        setMessages(prev => [...prev, visionRes.message]);
+        if (!activeConversationId) {
+          setActiveConversationId(visionRes.conversationId);
+        }
+        triggerTypewriterStream(visionRes.message);
+        loadConversations();
+      } catch (err: any) {
+        const errDetail = err?.message || t.chat.analysisError;
+        const errorMessage: MessageDto = {
+          id: `m_err_${Date.now()}`,
+          conversationId: activeConversationId || "temp",
+          sender: 2,
+          content: `⚠️ **AI Photo Teacher:**\n\n${errDetail}`,
+          createdAt: new Date().toISOString()
+        };
+        setMessages(prev => [...prev, errorMessage]);
+      } finally {
+        setIsSending(false);
+        setIsVisionAnalyzing(false);
+      }
+      return;
+    }
+
+    // Standard text message branch
     const userMessage: MessageDto = {
       id: `m_${Date.now()}`,
       conversationId: activeConversationId || "temp",
@@ -426,7 +574,42 @@ export default function ChatPage() {
       </div>
 
       {/* Main Chat Stream Container */}
-      <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
+      <div
+        style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, position: "relative" }}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+      >
+        {/* Drag & Drop Visual Overlay */}
+        {isDraggingOver && (
+          <div
+            style={{
+              position: "absolute",
+              inset: "12px",
+              zIndex: 50,
+              backgroundColor: "rgba(11, 15, 28, 0.9)",
+              backdropFilter: "blur(10px)",
+              border: "2px dashed var(--accent-purple)",
+              borderRadius: "var(--radius-xl)",
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: "14px",
+              pointerEvents: "none",
+              boxShadow: "0 0 30px rgba(139, 92, 246, 0.3)"
+            }}
+          >
+            <UploadCloud size={52} color="var(--accent-cyan)" className="animate-bounce" />
+            <div style={{ fontSize: "17px", fontWeight: "700", color: "var(--text-primary)" }}>
+              {t.chat.dragDropImage}
+            </div>
+            <div style={{ fontSize: "12px", color: "var(--text-muted)" }}>
+              {t.chat.photoTeacherBadge} • JPG, PNG, WEBP
+            </div>
+          </div>
+        )}
+
         {/* Chat Header */}
         <div style={{
           padding: "12px 24px",
@@ -453,7 +636,7 @@ export default function ChatPage() {
               <div style={{ fontSize: "15px", fontWeight: "700" }}>{t.chat.title}</div>
               <div style={{ fontSize: "11px", color: "var(--accent-cyan)", display: "flex", alignItems: "center", gap: "4px" }}>
                 <span style={{ width: "6px", height: "6px", borderRadius: "50%", backgroundColor: "#10b981" }} />
-                <span>Conversational AI • Kontekst & Tarix Faol</span>
+                <span>Multimodal Vision AI & Voice • Kontekst & Tarix Faol</span>
               </div>
             </div>
           </div>
@@ -514,6 +697,57 @@ export default function ChatPage() {
                     wordBreak: "break-word"
                   }}
                 >
+                  {/* Attached Vision Image if present */}
+                  {msg.imageUrl && (
+                    <div style={{ marginBottom: "12px" }}>
+                      <div
+                        onClick={() => setLightboxImageUrl(msg.imageUrl!)}
+                        style={{
+                          cursor: "pointer",
+                          borderRadius: "var(--radius-md)",
+                          overflow: "hidden",
+                          maxHeight: "280px",
+                          display: "inline-block",
+                          position: "relative",
+                          border: "1px solid var(--border-glass)",
+                          backgroundColor: "#050811",
+                        }}
+                        title={t.chat.viewFullImage}
+                      >
+                        <img
+                          src={getFileUrl(msg.imageUrl)}
+                          alt="Vision attachment"
+                          style={{
+                            maxWidth: "100%",
+                            maxHeight: "280px",
+                            objectFit: "contain",
+                            display: "block",
+                            transition: "transform 0.2s ease",
+                          }}
+                        />
+                        <div
+                          style={{
+                            position: "absolute",
+                            bottom: "6px",
+                            right: "6px",
+                            backgroundColor: "rgba(0,0,0,0.65)",
+                            backdropFilter: "blur(4px)",
+                            padding: "3px 8px",
+                            borderRadius: "6px",
+                            fontSize: "11px",
+                            color: "#ffffff",
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "4px",
+                          }}
+                        >
+                          <ZoomIn size={12} />
+                          <span>{t.chat.viewFullImage}</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   <MessageContent content={textContent} isStreaming={isCurrentlyStreaming} />
 
                   {/* Sources if present */}
@@ -612,7 +846,40 @@ export default function ChatPage() {
             );
           })}
 
-          {isSending && (
+          {/* AI Analyzing Indicator (Vision or Text) */}
+          {isVisionAnalyzing ? (
+            <div style={{ display: "flex", gap: "12px", alignSelf: "flex-start", alignItems: "center" }}>
+              <div style={{ width: "36px", height: "36px", borderRadius: "10px", background: "var(--bg-tertiary)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <Scan size={18} color="var(--accent-purple)" className="animate-pulse" />
+              </div>
+              <div className="glass-panel" style={{
+                padding: "14px 20px",
+                borderRadius: "var(--radius-lg)",
+                display: "flex",
+                flexDirection: "column",
+                gap: "8px",
+                background: "linear-gradient(135deg, rgba(139, 92, 246, 0.15) 0%, rgba(6, 182, 212, 0.15) 100%)",
+                border: "1px solid rgba(139, 92, 246, 0.4)"
+              }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                  <Sparkles size={16} className="animate-spin" color="var(--accent-purple)" />
+                  <span style={{ fontSize: "13px", fontWeight: "600", color: "var(--text-primary)" }}>
+                    {t.chat.analyzingImage}
+                  </span>
+                </div>
+                <div style={{
+                  height: "4px",
+                  width: "220px",
+                  borderRadius: "2px",
+                  backgroundColor: "rgba(255, 255, 255, 0.1)",
+                  overflow: "hidden",
+                  position: "relative"
+                }}>
+                  <div className="vision-scan-beam" />
+                </div>
+              </div>
+            </div>
+          ) : isSending ? (
             <div style={{ display: "flex", gap: "12px", alignSelf: "flex-start", alignItems: "center" }}>
               <div style={{ width: "36px", height: "36px", borderRadius: "10px", background: "var(--bg-tertiary)", display: "flex", alignItems: "center", justifyContent: "center" }}>
                 <Bot size={18} color="var(--accent-cyan)" />
@@ -622,7 +889,7 @@ export default function ChatPage() {
                 <span style={{ fontSize: "13px", color: "var(--text-muted)" }}>AI repetitor javob tayyorlamoqda...</span>
               </div>
             </div>
-          )}
+          ) : null}
 
           <div ref={messagesEndRef} />
         </div>
@@ -670,7 +937,172 @@ export default function ChatPage() {
           ))}
         </div>
 
-        {/* Input Bar & Large Glowing Microphone */}
+        {/* Hidden File Input Elements for Native System Pickers */}
+        <input
+          ref={cameraInputRef}
+          type="file"
+          accept="image/*"
+          capture="environment"
+          style={{ display: "none" }}
+          onChange={(e) => {
+            if (e.target.files && e.target.files[0]) {
+              validateAndSetImage(e.target.files[0]);
+              e.target.value = "";
+            }
+          }}
+        />
+
+        <input
+          ref={galleryInputRef}
+          type="file"
+          accept="image/jpeg,image/png,image/webp"
+          style={{ display: "none" }}
+          onChange={(e) => {
+            if (e.target.files && e.target.files[0]) {
+              validateAndSetImage(e.target.files[0]);
+              e.target.value = "";
+            }
+          }}
+        />
+
+        <input
+          ref={uploadInputRef}
+          type="file"
+          accept="image/*"
+          style={{ display: "none" }}
+          onChange={(e) => {
+            if (e.target.files && e.target.files[0]) {
+              validateAndSetImage(e.target.files[0]);
+              e.target.value = "";
+            }
+          }}
+        />
+
+        {/* Validation Error Banner if Any */}
+        {fileValidationErr && (
+          <div
+            style={{
+              padding: "10px 20px",
+              backgroundColor: "rgba(244, 63, 94, 0.15)",
+              borderTop: "1px solid var(--accent-rose)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              fontSize: "12px",
+              color: "var(--accent-rose)",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <AlertCircle size={16} />
+              <span>{fileValidationErr}</span>
+            </div>
+            <button
+              onClick={() => setFileValidationErr(null)}
+              className="btn-icon"
+              style={{ width: "24px", height: "24px", borderRadius: "6px" }}
+            >
+              <X size={14} />
+            </button>
+          </div>
+        )}
+
+        {/* Selected Image Preview Floating Card */}
+        {selectedImagePreview && (
+          <div
+            style={{
+              padding: "10px 20px",
+              borderTop: "1px solid var(--border-glass)",
+              backgroundColor: "rgba(139, 92, 246, 0.08)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: "12px",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: "12px", minWidth: 0 }}>
+              <div
+                onClick={() => setLightboxImageUrl(selectedImagePreview)}
+                style={{
+                  position: "relative",
+                  width: "50px",
+                  height: "50px",
+                  borderRadius: "10px",
+                  overflow: "hidden",
+                  border: "2px solid var(--accent-purple)",
+                  cursor: "pointer",
+                  flexShrink: 0,
+                  backgroundColor: "#050811",
+                }}
+                title={t.chat.viewFullImage}
+              >
+                <img
+                  src={selectedImagePreview}
+                  alt="Preview"
+                  style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                />
+                <div
+                  style={{
+                    position: "absolute",
+                    inset: 0,
+                    background: "rgba(0,0,0,0.3)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  <ZoomIn size={14} color="#fff" />
+                </div>
+              </div>
+
+              <div style={{ minWidth: 0 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
+                  <span
+                    style={{
+                      fontSize: "10px",
+                      fontWeight: 700,
+                      padding: "2px 8px",
+                      borderRadius: "10px",
+                      background: "var(--gradient-brand)",
+                      color: "#fff",
+                      letterSpacing: "0.4px"
+                    }}
+                  >
+                    ✨ {t.chat.photoTeacherBadge}
+                  </span>
+                  <span style={{ fontSize: "11px", color: "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "200px" }}>
+                    {selectedImageFile?.name} ({((selectedImageFile?.size || 0) / (1024 * 1024)).toFixed(2)} MB)
+                  </span>
+                </div>
+                <div style={{ fontSize: "11px", color: "var(--accent-cyan)", marginTop: "2px" }}>
+                  {t.chat.optionalQuestionPlaceholder}
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display: "flex", alignItems: "center", gap: "6px", flexShrink: 0 }}>
+              <button
+                onClick={() => galleryInputRef.current?.click()}
+                className="btn-secondary"
+                style={{ padding: "6px 10px", fontSize: "11px" }}
+                title={t.chat.retryImage}
+              >
+                <RotateCcw size={12} />
+                <span>{t.chat.retryImage}</span>
+              </button>
+
+              <button
+                onClick={handleClearImage}
+                className="btn-icon"
+                style={{ width: "32px", height: "32px", borderRadius: "8px", color: "var(--accent-rose)" }}
+                title={t.chat.removeImage}
+              >
+                <X size={16} />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Input Bar & Large Glowing Microphone + Vision Action Buttons */}
         <div style={{
           padding: "12px 20px 16px 20px",
           borderTop: "1px solid var(--border-glass)",
@@ -710,7 +1142,40 @@ export default function ChatPage() {
               </div>
             </div>
           ) : (
-            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              {/* 📷 Camera Button */}
+              <button
+                onClick={() => setIsCameraModalOpen(true)}
+                className="photo-action-btn"
+                title={t.chat.camera}
+                disabled={isSending}
+              >
+                <Camera size={18} color="var(--accent-cyan)" />
+                <span className="hidden sm:inline" style={{ fontSize: "12px" }}>{t.chat.camera}</span>
+              </button>
+
+              {/* 🖼️ Gallery Button */}
+              <button
+                onClick={() => galleryInputRef.current?.click()}
+                className="photo-action-btn"
+                title={t.chat.gallery}
+                disabled={isSending}
+              >
+                <ImageIcon size={18} color="var(--accent-purple)" />
+                <span className="hidden sm:inline" style={{ fontSize: "12px" }}>{t.chat.gallery}</span>
+              </button>
+
+              {/* 📎 Upload Button */}
+              <button
+                onClick={() => uploadInputRef.current?.click()}
+                className="photo-action-btn"
+                title={t.chat.upload}
+                disabled={isSending}
+              >
+                <Paperclip size={18} color="var(--accent-emerald)" />
+                <span className="hidden sm:inline" style={{ fontSize: "12px" }}>{t.chat.upload}</span>
+              </button>
+
               {/* Big Pulsing Mic Button */}
               <button
                 onClick={startVoiceRecording}
@@ -726,7 +1191,7 @@ export default function ChatPage() {
                 }}
                 title="Ovozli savol berish"
               >
-                <Mic size={22} />
+                <Mic size={20} />
               </button>
 
               {/* Text Input */}
@@ -735,17 +1200,18 @@ export default function ChatPage() {
                 value={inputContent}
                 onChange={(e) => setInputContent(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
-                placeholder={t.chat.typePlaceholder}
+                placeholder={selectedImageFile ? t.chat.optionalQuestionPlaceholder : t.chat.typePlaceholder}
                 className="input-field"
-                style={{ height: "48px", borderRadius: "var(--radius-md)" }}
+                style={{ height: "48px", borderRadius: "var(--radius-md)", flex: 1 }}
               />
 
               {/* Send Button */}
               <button
                 onClick={() => handleSendMessage()}
-                disabled={!inputContent.trim() || isSending}
+                disabled={(!inputContent.trim() && !selectedImageFile) || isSending}
                 className="btn-primary"
                 style={{ width: "48px", height: "48px", padding: 0, borderRadius: "14px", flexShrink: 0 }}
+                title={t.common.submit}
               >
                 <Send size={18} />
               </button>
@@ -753,6 +1219,20 @@ export default function ChatPage() {
           )}
         </div>
       </div>
+
+      {/* Camera Capture Modal */}
+      <CameraCaptureModal
+        isOpen={isCameraModalOpen}
+        onClose={() => setIsCameraModalOpen(false)}
+        onCapture={validateAndSetImage}
+      />
+
+      {/* Fullscreen Image Lightbox Modal */}
+      <ImageLightboxModal
+        imageUrl={lightboxImageUrl}
+        onClose={() => setLightboxImageUrl(null)}
+      />
     </div>
   );
 }
+

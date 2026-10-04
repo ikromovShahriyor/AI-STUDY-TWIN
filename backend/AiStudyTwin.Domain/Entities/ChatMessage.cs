@@ -12,4 +12,7 @@ public class ChatMessage : BaseEntity
     public string Content { get; set; } = string.Empty;
     public string? SourcesJson { get; set; }
     public string? AudioUrl { get; set; }
+    public string? ImageUrl { get; set; }
+    public Guid? VisionInteractionId { get; set; }
+    public VisionInteraction? VisionInteraction { get; set; }
 }
