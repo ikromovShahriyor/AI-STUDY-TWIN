@@ -1,15 +1,22 @@
 import { AuthResponse, StudentProfileDto, UserDto } from "./types";
 
 export const getApiBaseUrl = (): string => {
+  if (typeof window !== "undefined") {
+    const host = window.location.hostname;
+    if (host !== "localhost" && host !== "127.0.0.1") {
+      if (
+        process.env.NEXT_PUBLIC_API_URL &&
+        !process.env.NEXT_PUBLIC_API_URL.includes("localhost") &&
+        !process.env.NEXT_PUBLIC_API_URL.includes("127.0.0.1")
+      ) {
+        return process.env.NEXT_PUBLIC_API_URL.replace(/\/+$/, "");
+      }
+      // Contabo VPS IP or server domain with backend port 7778
+      return `${window.location.protocol}//${host}:7778/api`;
+    }
+  }
   if (process.env.NEXT_PUBLIC_API_URL) {
     return process.env.NEXT_PUBLIC_API_URL.replace(/\/+$/, "");
-  }
-  if (typeof window !== "undefined") {
-    if (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") {
-      return "http://localhost:5050/api";
-    }
-    // Auto-detect Contabo VPS IP or server domain
-    return `${window.location.protocol}//${window.location.hostname}:7778/api`;
   }
   return "http://localhost:5050/api";
 };
